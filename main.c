@@ -200,10 +200,10 @@ void parseOpts(struct config_container* config, int argc, char** argv) {
                 strncpy(config->ledPath, optarg, PATH_MAX);
                 break;
             case 's':
-                config->startval = (int) *optarg;
+                config->startval = atoi(optarg);
                 break;
             case 't':
-                config->timeout = (int) *optarg;
+                config->timeout = atoi(optarg);
                 break;
             case 'u':
                 config->use_lid = 1;
@@ -284,9 +284,11 @@ int main(int argc, char** argv) {
     }
     
     if ( config.startval > -1 ) {
-        setBrt(ledBrt, config.startval, maxBrt);
+        curBrt = ( config.startval > maxBrt ) ? maxBrt : config.startval;
+        setBrt(ledBrt, curBrt, maxBrt);
     } else if ( config.startval == -1 ) {
-        setBrt(ledBrt, maxBrt, maxBrt);
+        curBrt = maxBrt;
+        setBrt(ledBrt, curBrt, maxBrt);
     }
 
     while ( 1 ) {
