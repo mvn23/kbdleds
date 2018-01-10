@@ -1,8 +1,25 @@
 /*
- * File:   main.c
- * Author: milan
+ * Copyright (C) 2018 Milan van Nugteren <milan at network23.nl>
  *
- * Created on December 21, 2017, 11:30 AM
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* 
+ * File:   main.c
+ * Author: Milan van Nugteren <milan at network23.nl>
+ *
+ * Created on January 10, 2018, 2:19 AM
  */
 
 #include <stdio.h>
@@ -11,50 +28,96 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <linux/limits.h>
-#include <math.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <getopt.h>
 
+struct config_container {
+    char configPath[PATH_MAX];
+    char ledPath[PATH_MAX];
+    int timeout;
+    char use_lid;
+};
 
 /**
- * findKbdPath() find keyboard event device @path by @name
- * @param name Pointer to char[] holding the keyboard name.
- * @param path Pointer to char[] to hold the device path.
+ * showHelp() should be self explanatory...
  */
-void findKbdPath(char* name, char* path) {
+void showHelp() {
+    printf("Usage: kbdleds [OPTION]...\n");
+    printf("Control your keyboard led lights.\n");
+    printf("\n");
+    printf("\t-c\t--config [FILE]\tLoad config from [FILE]\n");
+    printf("\t-h\t--help\t\t\tShow this help message\n");
+    printf("\t-l\t--ledpath [PATH]\tSet the base path to your led control\n");
+    printf("\t-t\t--timeout [VALUE]\tSet the inactivity timeout\n");
+    printf("\t-u\t--use-lid\t\t\tReact to lid open/close events\n");
+    exit(0);
+}
+
+/**
+ * findKbdPaths() find keyboard event device @paths
+ * @param paths Pointer to array of char[] to hold the device paths.
+ *
+ */
+void findKbdPaths(int* numKbds, char*** pathptr, struct config_container* config) {
     FILE *fName;
     DIR *inputDir;
-    char fContents[strlen(name) + 2];
-    unsigned int i;
+    char contents[12];
+    char lidsw[] = "Lid Switch\n";
+    char path[PATH_MAX];
     struct dirent *entp;
+    char** paths = NULL;
+
     inputDir = opendir("/sys/class/input");
     while (entp = readdir(inputDir)) {
         if (strncmp(entp->d_name, "event", 5) == 0) {
-            strncpy(path, "", 1);
-            strncat(path, "/sys/class/input/", 18);
+            strncpy(path, "/sys/class/input/", 18);
             strncat(path, entp->d_name, 8);
-            strncat(path, "/device/name", 13);
+            strncat(path, "/device/capabilities/key", 25);
             fName = fopen(path, "r");
-            if (fName != NULL) {
-                strncpy(fContents, "", 1);
-                for ( i = 0; i < strlen(name) + 1; i++ ) {
-                    int c = fgetc(fName);
-                    if ( c == 10 || feof(fName)) {
-                        break;
+            if (fName == NULL) {
+                perror("Error reading from file");
+                exit(1);
+            }
+            strncpy(contents, "", 1);
+            if ( fgets(contents, 12, fName) != NULL ) {
+                if ( strncmp(contents, "0\n", 3) != 0 ) {
+                    paths = realloc(paths, (*numKbds+1) * sizeof(char*));
+                    paths[*numKbds] = malloc(strlen(entp->d_name) + 12);
+                    strncpy(paths[*numKbds], "/dev/input/", 12);
+                    strncat(paths[*numKbds], entp->d_name, strlen(entp->d_name));
+                    ++*numKbds;
+                    fclose(fName);
+                    continue;
+                }
+            }
+            fclose(fName);
+
+            if ( config->use_lid ) {
+                strncpy(path, "/sys/class/input/", 18);
+                strncat(path, entp->d_name, 8);
+                strncat(path, "/device/name", 13);
+                fName = fopen(path, "r");
+                if (fName == NULL) {
+                    perror("Error reading from file");
+                    exit(1);
+                }
+                strncpy(contents, "", 1);
+                if ( fgets(contents, 12, fName) != NULL ) {
+                    if ( strncmp(contents, lidsw, 12) == 0 ) {
+                        paths = realloc(paths, (*numKbds+1) * sizeof(char*));
+                        paths[*numKbds] = malloc(strlen(entp->d_name) + 12);
+                        strncpy(paths[*numKbds], "/dev/input/", 12);
+                        strncat(paths[*numKbds], entp->d_name, 8);
+                        ++*numKbds;
                     }
-                    fContents[i] = c;
-                    fContents[i+1] = 0;
                 }
                 fclose(fName);
-                if ( strncmp(fContents, name, strlen(name) + 1) == 0 ) {
-                    strncpy(path, "/dev/input/", 12); 
-                    strncat(path, entp->d_name, 8);
-                    break;
-                }
             }
         }
     }
+    *pathptr = paths;
     closedir(inputDir);
     return;
 }
@@ -91,7 +154,7 @@ int setBrt(FILE* control, int value, int max) {
     int cur = getBrt(control);
     int ret;
     if ( value == cur || (value < 0 && cur == 0) || (value > max && cur == max) ) {
-        return(1);        
+        return(1);
     }
     value = ( value < 0 ) ? 0 : (value < max) ? value : max;
     fseek(control, 0, SEEK_SET);
@@ -103,99 +166,170 @@ int setBrt(FILE* control, int value, int max) {
     return(0);
 }
 
+/**
+ * parseOpts() parse command line options.
+ * @param config Pointer to config_container in which the options will be stored.
+ * @param argc Number of arguments (as in main()).
+ * @param argv Array of arguments (as in main()).
+ */
+void parseOpts(struct config_container* config, int argc, char** argv) {
+    int opt;
+
+    struct option options[] = {
+        {"config", required_argument, NULL, 'c'},
+        {"help", no_argument, NULL, 'h'},
+        {"ledpath", required_argument, NULL, 'l'},
+        {"timeout", required_argument, NULL, 't'},
+        {"use-lid", no_argument, NULL, 'u'},
+        { NULL, 0, NULL, 0 }
+    };
+
+    while ( (opt = getopt_long(argc, argv, "c:hl:t:u", options, NULL)) != -1 ) {
+        switch ( opt ) {
+            case 'h':
+                showHelp();
+                break;
+            case 'c':
+                strncpy(config->configPath, optarg, PATH_MAX);
+                break;
+            case 'l':
+                strncpy(config->ledPath, optarg, PATH_MAX);
+                break;
+            case 't':
+                config->timeout = (int) *optarg;
+                break;
+        }
+    }
+ }
+
 
 /**
  * main() main function.
  * @param argc
  * @param argv
- * @return 
+ * @return
  */
 int main(int argc, char** argv) {
-    char kbdName[] = "AT Translated Set 2 keyboard";
-    char ledPath[] = "/sys/class/leds/asus::kbd_backlight/";
-    char maxPath[strlen(ledPath)+15];
-    char curPath[strlen(ledPath)+11];
-    char kbdPath[PATH_MAX];
-    int timeout = 15;
+    struct config_container config;
+    config.configPath[0] = '\0';
+    config.ledPath[0] = '\0';
+    config.timeout = 15;
+    config.use_lid = 0;
     int curBrt = 0;
     int maxBrt = 0;
     FILE *ledBrt;
-    FILE *kbdEvent;
+    FILE **kbdEvent;
     size_t eventsize = sizeof (struct input_event);
     struct input_event *evntp = malloc(eventsize);
     fd_set rfds;
+    int nfds = 1;
+    int fd;
     struct timeval timer;
     int retval;
-    
-    strncpy(maxPath, ledPath, strlen(ledPath)+1);
-    strncpy(curPath, ledPath, strlen(ledPath)+1);
-    
+    char** kbdPaths = NULL;
+    int numKbds = 0;
+
+    //TODO: read config file
+
+    parseOpts(&config, argc, argv);
+
+    char maxPath[strlen(config.ledPath)+16];
+    char curPath[strlen(config.ledPath)+12];
+
+    strncpy(maxPath, config.ledPath, strlen(config.ledPath)+1);
+    strncpy(curPath, config.ledPath, strlen(config.ledPath)+1);
+
     //Determine max brightness
-    ledBrt = fopen(strncat(maxPath, "max_brightness", 15), "r");
+    ledBrt = fopen(strncat(maxPath, "/max_brightness", 16), "r");
     if ( ledBrt != NULL ) {
         storeBrt(&maxBrt, ledBrt);
     } else {
-        perror("Could not determine keyboard's maximum brightness");
+        perror("Could not determine keyboard's maximum brightness. Is ledpath set correctly?");
         exit(1);
     }
-    
+
     //Determine current brightness
-    ledBrt = freopen(strncat(curPath, "brightness", 11), "r+", ledBrt);
+    ledBrt = freopen(strncat(curPath, "/brightness", 12), "r+", ledBrt);
     if ( ledBrt != NULL ) {
         storeBrt(&curBrt, ledBrt);
     } else {
         perror("Could not determine keyboard's current brightness");
         exit(1);
     }
-    
-    findKbdPath(kbdName, kbdPath);
-    kbdEvent = fopen(kbdPath, "rb");
-    if ( kbdEvent != NULL ) {
-        
-        int fd = fileno(kbdEvent);
-        
-        while ( 1 ) {
-            FD_ZERO(&rfds);
-            FD_SET(fd, &rfds);
-            
-            timer.tv_sec = timeout;
-            timer.tv_usec = 0;
-            
-            retval =  select(fd+1, &rfds, NULL, NULL, &timer);
 
-            if (retval == -1) {
-                perror("select()");
-            } else if (retval) {
-                //printf("Data should be available now.\n");
-                if ( fread(evntp, eventsize, 1, kbdEvent) == 1 ) {
-                    //TODO: restore keyboard brightness if necessary.
-                    if ( evntp->type == EV_KEY && evntp->value != 0 ) {
-                        setBrt(ledBrt, curBrt, maxBrt);
-                        //printf("timeval - tv_sec:\t%ld\n", evntp->time.tv_sec);
-                        //printf("timeval - tv_usec:\t%ld\n", evntp->time.tv_usec);
-                        //printf("type:\t%hu\n", evntp->type);
-                        //printf("code:\t%hu\n", evntp->code);
-                        //printf("value:\t%u\n", evntp->value);
-                    }
-                    //TODO: catch XF86KbdBrightness* keys and adjust brightness accordingly.
-                    //      unfortunately these keys are sent from a different input device...;
-                } else {
-                    perror("Error reading from stream.");
-                    break;
-                }
-            } else {
-                //printf("No data within %i seconds.\n", timeout);
-                //TODO: store brightness value if > 0 and turn keyboard lights off.
-                if ( getBrt(ledBrt) > 0 ) {
-                    storeBrt(&curBrt, ledBrt);
-                }
-                setBrt(ledBrt, 0, maxBrt);
+    findKbdPaths(&numKbds, &kbdPaths, &config);
+    kbdEvent = malloc(numKbds * sizeof(FILE*));
+
+    for ( int i = 0; i < numKbds; ++i ) {
+        kbdEvent[i] = fopen(kbdPaths[i], "rb");
+        if ( kbdEvent[i] == NULL ) {
+            perror("Could not open event interface.");
+        } else {
+            setvbuf(kbdEvent[i], NULL, _IONBF, 0);
+        }
+    }
+
+    while ( 1 ) {
+        nfds = 1;
+        FD_ZERO(&rfds);
+        for ( int i = 0; i < numKbds; ++i ) {
+            if ( kbdEvent[i] != NULL ) {
+                fd = fileno(kbdEvent[i]);
+                FD_SET(fd, &rfds);
+                nfds = ( nfds > fd+1 ) ? nfds : (fd+1);
             }
         }
-    } else {
-        perror("Error opening keyboard stream.");
+
+        if ( nfds == 1 ) {
+            perror("No event interfaces could be opened.");
+            exit(1);
+        }
+
+        timer.tv_sec = config.timeout;
+        timer.tv_usec = 0;
+
+        retval = select(nfds, &rfds, NULL, NULL, &timer);
+
+        if ( retval == -1 ) {
+            perror("Error in select()");
+        } else if ( retval ) {
+            //Data available
+            for ( int i = 0; i < numKbds; ++i ) {
+                if ( FD_ISSET(fileno(kbdEvent[i]), &rfds) ) {
+                    if ( fread(evntp, eventsize, 1, kbdEvent[i]) == 1 ) {
+                        if ( evntp->type == EV_KEY && evntp->value != 0 ) {
+                            setBrt(ledBrt, curBrt, maxBrt);
+                        } else if ( config.use_lid && evntp->type == EV_SW && evntp->code == SW_LID ) {
+                            if ( evntp->value ) { //Lid closed
+                                if ( getBrt(ledBrt) > 0 ) {
+                                    storeBrt(&curBrt, ledBrt);
+                                }
+                                setBrt(ledBrt, 0, maxBrt);
+                            } else { //Lid opened
+                                setBrt(ledBrt, curBrt, maxBrt);
+                            }
+                        }
+                    } else {
+                        perror("Error reading from stream.");
+                        break;
+                    }
+                }
+            }
+        } else {
+            //Timeout reached
+            if ( getBrt(ledBrt) > 0 ) {
+                storeBrt(&curBrt, ledBrt);
+            }
+            setBrt(ledBrt, 0, maxBrt);
+        }
     }
-    fclose(kbdEvent);
+
+    for ( int i = 0; i < numKbds; ++i ) {
+        fclose(kbdEvent[i]);
+        free(kbdPaths[i]);
+    }
+    free(kbdEvent);
+    free(kbdPaths);
     fclose(ledBrt);
     free(evntp);
 }
