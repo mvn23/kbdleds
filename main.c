@@ -36,6 +36,7 @@
 struct config_container {
     char configPath[PATH_MAX];
     char ledPath[PATH_MAX];
+    int startval;
     int timeout;
     char use_lid;
 };
@@ -50,8 +51,10 @@ void showHelp() {
     printf("\t-c\t--config [FILE]\tLoad config from [FILE]\n");
     printf("\t-h\t--help\t\t\tShow this help message\n");
     printf("\t-l\t--ledpath [PATH]\tSet the base path to your led control\n");
+    printf("\t-s\t--startvalue [VALUE]\tSet brightness to [VALUE] on start\n");
+    printf("\t\t\t\t\t(-1 to set max brightness, -2 for no change)\n");
     printf("\t-t\t--timeout [VALUE]\tSet the inactivity timeout\n");
-    printf("\t-u\t--use-lid\t\t\tReact to lid open/close events\n");
+    printf("\t-u\t--use-lid\t\tReact to lid open/close events\n");
     exit(0);
 }
 
@@ -179,24 +182,31 @@ void parseOpts(struct config_container* config, int argc, char** argv) {
         {"config", required_argument, NULL, 'c'},
         {"help", no_argument, NULL, 'h'},
         {"ledpath", required_argument, NULL, 'l'},
+        {"startvalue", required_argument, NULL, 's'},
         {"timeout", required_argument, NULL, 't'},
         {"use-lid", no_argument, NULL, 'u'},
         { NULL, 0, NULL, 0 }
     };
 
-    while ( (opt = getopt_long(argc, argv, "c:hl:t:u", options, NULL)) != -1 ) {
+    while ( (opt = getopt_long(argc, argv, "c:hl:s:t:u", options, NULL)) != -1 ) {
         switch ( opt ) {
-            case 'h':
-                showHelp();
-                break;
             case 'c':
                 strncpy(config->configPath, optarg, PATH_MAX);
+                break;
+            case 'h':
+                showHelp();
                 break;
             case 'l':
                 strncpy(config->ledPath, optarg, PATH_MAX);
                 break;
+            case 's':
+                config->startval = (int) *optarg;
+                break;
             case 't':
                 config->timeout = (int) *optarg;
+                break;
+            case 'u':
+                config->use_lid = 1;
                 break;
         }
     }
@@ -213,6 +223,7 @@ int main(int argc, char** argv) {
     struct config_container config;
     config.configPath[0] = '\0';
     config.ledPath[0] = '\0';
+    config.startval = -2;
     config.timeout = 15;
     config.use_lid = 0;
     int curBrt = 0;
@@ -239,6 +250,9 @@ int main(int argc, char** argv) {
     strncpy(maxPath, config.ledPath, strlen(config.ledPath)+1);
     strncpy(curPath, config.ledPath, strlen(config.ledPath)+1);
 
+    if ( config.ledPath[0] == '\0' ) {
+        showHelp();
+    }
     //Determine max brightness
     ledBrt = fopen(strncat(maxPath, "/max_brightness", 16), "r");
     if ( ledBrt != NULL ) {
@@ -267,6 +281,12 @@ int main(int argc, char** argv) {
         } else {
             setvbuf(kbdEvent[i], NULL, _IONBF, 0);
         }
+    }
+    
+    if ( config.startval > -1 ) {
+        setBrt(ledBrt, config.startval, maxBrt);
+    } else if ( config.startval == -1 ) {
+        setBrt(ledBrt, maxBrt, maxBrt);
     }
 
     while ( 1 ) {
@@ -298,8 +318,20 @@ int main(int argc, char** argv) {
                 if ( FD_ISSET(fileno(kbdEvent[i]), &rfds) ) {
                     if ( fread(evntp, eventsize, 1, kbdEvent[i]) == 1 ) {
                         if ( evntp->type == EV_KEY && evntp->value != 0 ) {
+                            if ( evntp->code == KEY_KBDILLUMUP ) {
+                                ( curBrt < maxBrt ) ? ++curBrt : curBrt;
+                            } else if ( evntp->code == KEY_KBDILLUMDOWN ) {
+                                ( curBrt > 0 ) ? --curBrt : curBrt;
+                            } else if ( evntp->code == KEY_KBDILLUMTOGGLE ) {
+                                if ( getBrt(ledBrt) == 0 ) {
+                                    curBrt = maxBrt;
+                                } else {
+                                    curBrt = 0;
+                                }
+                            }
                             setBrt(ledBrt, curBrt, maxBrt);
-                        } else if ( config.use_lid && evntp->type == EV_SW && evntp->code == SW_LID ) {
+                        } else if ( config.use_lid && evntp->type == EV_SW 
+                                && evntp->code == SW_LID ) {
                             if ( evntp->value ) { //Lid closed
                                 if ( getBrt(ledBrt) > 0 ) {
                                     storeBrt(&curBrt, ledBrt);
