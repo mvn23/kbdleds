@@ -16,7 +16,7 @@
  */
 
 /* 
- * File:   main.c
+ * File:   main.c (GNU C)
  * Author: Milan van Nugteren <milan at network23.nl>
  *
  * Created on January 10, 2018, 2:19 AM
@@ -39,6 +39,7 @@ struct config_container {
     int startval;
     int timeout;
     char use_lid;
+    char** exclude;
 };
 
 /**
@@ -55,26 +56,96 @@ void showHelp() {
     printf("\t\t\t\t\t(-1 to set max brightness, -2 for no change)\n");
     printf("\t-t\t--timeout [VALUE]\tSet the inactivity timeout\n");
     printf("\t-u\t--use-lid\t\tReact to lid open/close events\n");
+    printf("\t-x\t--exclude [NAME]\tExclude keyboard device with name [NAME]\n");
+    printf("\t\t\t\t\t(may be given more than once)\n");
     exit(0);
 }
 
 /**
- * findKbdPaths() find keyboard event device @paths
- * @param paths Pointer to array of char[] to hold the device paths.
- *
+ * isInList() check if @value is an element of @list
+ * @param list char** to collection of char* to be checked against @value
+ * @param value char* to compare to each element of @list
+ * @return 1 if @value is found in @list, 0 otherwise
  */
-void findKbdPaths(int* numKbds, char*** pathptr, struct config_container* config) {
+int isInList(char** list, char* value) {
+    int i = 0;
+    while ( list[i++] != NULL ) {
+        if ( strncmp(list[i-1], value, strlen(value)+1) == 0 ) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * addToList() append @value to @list
+ * @param list Pointer to char** to which @value should be added
+ * @param value Pointer to char to be added to @list
+ * @return the number of elements in the list after adding @value (excluding the
+ *         last NULL), or 0 on failure
+ */
+int addToList(char*** list, char* value) {
+    int len = strlen(value);
+    int i;
+    for ( i = 0; (*list)[i] != NULL; ++i ) {}
+    char **newlist = realloc(*list, ((i+2) * sizeof(char*)));
+    if ( newlist != NULL ) {
+        *list = newlist;
+        (*list)[i] = malloc(len+1);
+        strncpy((*list)[i], value, len+1);
+        (*list)[i+1] = NULL;
+        return (i+1);
+    }
+    return 0;
+}
+
+/**
+ * findKbdPaths() find keyboard event device @paths
+ * @param pathptr Pointer to array of char[] to hold the device paths
+ * @param config Pointer to config_container struct holding the config
+ * @return int The number of keyboards added to char** at @pathptr
+ */
+int findKbdPaths(char*** pathptr, struct config_container* config) {
     FILE *fName;
     DIR *inputDir;
-    char contents[12];
+    char contents[256];
     char lidsw[] = "Lid Switch\n";
     char path[PATH_MAX];
     struct dirent *entp;
-    char** paths = NULL;
+    char** paths = malloc(sizeof(char**));
+    char newpath[PATH_MAX];
+    int numKbds = 0;
+    paths[0] = NULL;
 
     inputDir = opendir("/sys/class/input");
     while (entp = readdir(inputDir)) {
         if (strncmp(entp->d_name, "event", 5) == 0) {
+            strncpy(path, "/sys/class/input/", 18);
+            strncat(path, entp->d_name, 8);
+            strncat(path, "/device/name", 13);
+            fName = fopen(path, "r");
+            if (fName == NULL) {
+                perror("Error reading from file");
+                exit(1);
+            }
+            strncpy(contents, "", 1);
+            if ( fgets(contents, 256, fName) != NULL ) {
+                contents[strcspn(contents, "\n")] = '\0';
+                if ( isInList(config->exclude, contents) ) {
+                    fclose(fName);
+                    continue;
+                }
+                if ( config->use_lid ) {
+                    if ( strncmp(contents, lidsw, 12) == 0 ) {
+                        strncpy(newpath, "/dev/input/", 12);
+                        strncat(newpath, entp->d_name, 8);
+                        numKbds = addToList(&paths, entp->d_name);
+                        fclose(fName);
+                        continue;
+                    }
+                }
+                fclose(fName);
+            }
             strncpy(path, "/sys/class/input/", 18);
             strncat(path, entp->d_name, 8);
             strncat(path, "/device/capabilities/key", 25);
@@ -86,43 +157,19 @@ void findKbdPaths(int* numKbds, char*** pathptr, struct config_container* config
             strncpy(contents, "", 1);
             if ( fgets(contents, 12, fName) != NULL ) {
                 if ( strncmp(contents, "0\n", 3) != 0 ) {
-                    paths = realloc(paths, (*numKbds+1) * sizeof(char*));
-                    paths[*numKbds] = malloc(strlen(entp->d_name) + 12);
-                    strncpy(paths[*numKbds], "/dev/input/", 12);
-                    strncat(paths[*numKbds], entp->d_name, strlen(entp->d_name));
-                    ++*numKbds;
+                    strncpy(newpath, "/dev/input/", 12);
+                    strncat(newpath, entp->d_name, 8);
+                    numKbds = addToList(&paths, newpath);
                     fclose(fName);
                     continue;
                 }
             }
             fclose(fName);
-
-            if ( config->use_lid ) {
-                strncpy(path, "/sys/class/input/", 18);
-                strncat(path, entp->d_name, 8);
-                strncat(path, "/device/name", 13);
-                fName = fopen(path, "r");
-                if (fName == NULL) {
-                    perror("Error reading from file");
-                    exit(1);
-                }
-                strncpy(contents, "", 1);
-                if ( fgets(contents, 12, fName) != NULL ) {
-                    if ( strncmp(contents, lidsw, 12) == 0 ) {
-                        paths = realloc(paths, (*numKbds+1) * sizeof(char*));
-                        paths[*numKbds] = malloc(strlen(entp->d_name) + 12);
-                        strncpy(paths[*numKbds], "/dev/input/", 12);
-                        strncat(paths[*numKbds], entp->d_name, 8);
-                        ++*numKbds;
-                    }
-                }
-                fclose(fName);
-            }
         }
     }
     *pathptr = paths;
     closedir(inputDir);
-    return;
+    return numKbds;
 }
 
 /**
@@ -185,10 +232,11 @@ void parseOpts(struct config_container* config, int argc, char** argv) {
         {"startvalue", required_argument, NULL, 's'},
         {"timeout", required_argument, NULL, 't'},
         {"use-lid", no_argument, NULL, 'u'},
+        {"exclude", required_argument, NULL, 'x'},
         { NULL, 0, NULL, 0 }
     };
 
-    while ( (opt = getopt_long(argc, argv, "c:hl:s:t:u", options, NULL)) != -1 ) {
+    while ( (opt = getopt_long(argc, argv, "c:hl:s:t:ux:", options, NULL)) != -1 ) {
         switch ( opt ) {
             case 'c':
                 strncpy(config->configPath, optarg, PATH_MAX);
@@ -208,9 +256,12 @@ void parseOpts(struct config_container* config, int argc, char** argv) {
             case 'u':
                 config->use_lid = 1;
                 break;
+            case 'x':
+                addToList(&config->exclude, optarg);
+                break;
         }
     }
- }
+}
 
 
 /**
@@ -226,6 +277,8 @@ int main(int argc, char** argv) {
     config.startval = -2;
     config.timeout = 15;
     config.use_lid = 0;
+    config.exclude = malloc(sizeof(char**));
+    config.exclude[0] = NULL;
     int curBrt = 0;
     int maxBrt = 0;
     FILE *ledBrt;
@@ -271,10 +324,10 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    findKbdPaths(&numKbds, &kbdPaths, &config);
+    numKbds = findKbdPaths(&kbdPaths, &config);
     kbdEvent = malloc(numKbds * sizeof(FILE*));
 
-    for ( int i = 0; i < numKbds; ++i ) {
+    for ( int i = 0; kbdPaths[i] != NULL; i++ ) {
         kbdEvent[i] = fopen(kbdPaths[i], "rb");
         if ( kbdEvent[i] == NULL ) {
             perror("Could not open event interface.");
@@ -303,7 +356,7 @@ int main(int argc, char** argv) {
         }
 
         if ( nfds == 1 ) {
-            perror("No event interfaces could be opened.");
+            printf("No event interfaces could be opened.");
             exit(1);
         }
 
