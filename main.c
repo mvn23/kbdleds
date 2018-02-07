@@ -16,7 +16,7 @@
  */
 
 /* 
- * File:   main.c (GNU C)
+ * File:   main.c
  * Author: Milan van Nugteren <milan at network23.nl>
  *
  * Created on January 10, 2018, 2:19 AM
@@ -50,6 +50,7 @@ void showHelp() {
     printf("Control your keyboard led lights.\n");
     printf("\n");
     printf("\t-c\t--config [FILE]\tLoad config from [FILE]\n");
+    printf("\t\t\t\t\t(default /etc/kbdleds.conf)\n");
     printf("\t-h\t--help\t\t\tShow this help message\n");
     printf("\t-l\t--ledpath [PATH]\tSet the base path to your led control\n");
     printf("\t-s\t--startvalue [VALUE]\tSet brightness to [VALUE] on start\n");
@@ -263,6 +264,51 @@ void parseOpts(struct config_container* config, int argc, char** argv) {
     }
 }
 
+void readConfig(char* file, struct config_container* config) {
+    FILE* fConf;
+    fConf = fopen(file, "r");
+    if ( fConf != NULL ) {
+        size_t count;
+        char var[32];
+        char val[PATH_MAX];
+        char scanstr[24];
+        char line[PATH_MAX+13];
+        snprintf(scanstr, 24, " %%32[^ \n=] = %%%d[^\n;]", (PATH_MAX-1));
+        while ( fgets(line, PATH_MAX+12, fConf) != NULL ) {
+            if ( feof(fConf) ) {
+                break;
+            }
+            count = sscanf(line, scanstr, &var, &val);
+            while ( val[strlen(val)-1] == ' ' || val[strlen(val)-1] == '\t' ) {
+                val[strlen(val)-1] = '\0';
+            }
+            if (var[0] != '#' && var[0] != ';') {
+                if ( count == 2 ) {
+                    if ( strncmp(var, "ledpath", 8) == 0 ) {
+                        strncpy(config->ledPath, val, PATH_MAX);
+                    } else if ( strncmp(var, "startvalue", 11) == 0 ) {
+                        config->startval = atoi(val);
+                    } else if ( strncmp(var, "timeout", 8) == 0 ) {
+                        config->timeout = atoi(val);
+                    } else if ( strncmp(var, "use-lid", 8) == 0 ) {
+                        if ( atoi(val) == 1 || ( strncmp(val, "true", 4) == 1 ) ) {
+                            config->use_lid = 1;
+                        }
+                    } else if ( strncmp(var, "exclude", 8) == 0 ) {
+                        addToList(&config->exclude, val);
+                    } else {
+                        printf("Unknown variable in config file: %s\n", var);
+                    }
+                } else if ( count == 1 ) {
+                    printf("Variable without value in config file: %s\n", var);
+                }
+            }
+            var[0] = '\0';
+            val[0] = '\0';
+        }
+    }
+}
+
 
 /**
  * main() main function.
@@ -293,7 +339,7 @@ int main(int argc, char** argv) {
     char** kbdPaths = NULL;
     int numKbds = 0;
 
-    //TODO: read config file
+    readConfig("/etc/kbdleds.conf", &config);
 
     parseOpts(&config, argc, argv);
 
@@ -417,6 +463,12 @@ int main(int argc, char** argv) {
     }
     free(kbdEvent);
     free(kbdPaths);
+
+    for ( int i = 0; config.exclude[i] != NULL; ++i ) {
+        free(config.exclude[i]);
+    }
+    free(config.exclude);
+    
     fclose(ledBrt);
     free(evntp);
 }
